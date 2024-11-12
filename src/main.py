@@ -6,113 +6,126 @@ import torch
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
 from model import LSTM
+import argparse
+from torch.optim.lr_scheduler import StepLR
 
-def init_dataloaders(train_dataset, test_dataset):
-    batch_size = 64
-    n_workers = 4
+def create_sequences(data, dates, seq_length, prediction_length):
+    X = []
+    y = []
+    sequence_dates = []
+    for i in range(len(data) - seq_length - prediction_length + 1):
+        x_sequence = data[i:i+seq_length]
+        y_sequence = data[i+seq_length:i+seq_length+prediction_length]
+        date = dates[i+seq_length:i+seq_length+prediction_length]
+        X.append(x_sequence)
+        y.append(y_sequence)
+        sequence_dates.append(date)
+    return np.array(X), np.array(y), np.array(sequence_dates)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=n_workers)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=n_workers)
-    return train_loader, test_loader
+def split_data(X, y, sequence_dates):
+    train_size = int(len(X) * 0.9)
+    X_train, y_train = X[:train_size], y[:train_size]
+    X_test, y_test = X[train_size:], y[train_size:]
+    train_dates, test_dates = sequence_dates[:train_size], sequence_dates[train_size:]
+    return X_train, y_train, X_test, y_test, train_dates, test_dates
 
-def create_sequences(data, seq_length):
-    sequences = []
-    targets = []
-    for i in range(len(data) - seq_length):
-        sequence = data[i:i+seq_length]
-        target = data[i+seq_length]
-        sequences.append(sequence)
-        targets.append(target)
-    return np.array(sequences), np.array(targets)
-
-def split_data(sequences, targets):
-    train_size = int(len(sequences) * 0.8)
-    X_train, X_test = sequences[:train_size], sequences[train_size:]
-    y_train, y_test = targets[:train_size], targets[train_size:]
-    return np.array(X_train), np.array(X_test), np.array(y_train), np.array(y_test)
-
-def rmse_loss(y_pred, y_true):
-    mse_loss = nn.MSELoss()
-    epsilon = 1e-8
-    return torch.sqrt(mse_loss(y_pred, y_true) + epsilon)
-
-def train(model, optimizer, num_epochs, train_loader, device):
+def train(model, optimizer, criterion, scheduler, num_epochs, train_loader, device):
     model.train()
     for epoch in range(num_epochs):
         epoch_loss = 0
         for X_train, y_train in train_loader:
             X_train, y_train = X_train.to(device), y_train.to(device)
             y_pred = model(X_train)
-            loss = rmse_loss(y_pred, y_train)
+            loss = criterion(y_pred, y_train)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-        avg_loss = epoch_loss / len(train_loader)
+        average_loss = epoch_loss / len(train_loader)
+        scheduler.step()
 
         if (epoch+1) % 5 == 0:
             torch.save({'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()},
                 f'checkpoints/lstm_{epoch+1}.pth')
-        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss}')
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {average_loss}, Learning Rate: {scheduler.get_last_lr()}')
 
-def test(model, test_loader, device):
+def test(model, criterion, test_loader, device):
     model.eval()
     total_loss = 0
     with torch.no_grad():
         for X_test, y_test in test_loader:
             X_test, y_test = X_test.to(device), y_test.to(device)
             y_pred = model(X_test)
-            loss = rmse_loss(y_pred, y_test)
+            loss = criterion(y_pred, y_test)
             total_loss += loss.item()
     avg_loss = total_loss / len(test_loader)
     print(f'Test Loss: {avg_loss}')
 
-def predict_next_day(model, scaler, data, seq_length, device):
+def predict(model, test_loader, scaler, device):
     model.eval()
     predictions = []
+    real_values = []
     with torch.no_grad():
-        sequence = data.values[-seq_length:]
-        sequence = np.expand_dims(sequence, axis=0) # add batch dimension
-        sequence = torch.tensor(sequence, dtype=torch.float32).to(device)
-        for _ in range(seq_length):
-            y_pred = model(sequence).to(device)
-            predictions.append(y_pred.cpu().numpy())
-            y_pred = y_pred.view(1, 1, -1)
+        for X_test, y_test in test_loader:
+            X_test, y_test = X_test.to(device), y_test.to(device)
+            y_pred = model(X_test)
             y_pred = y_pred.cpu().numpy()
-            sequence = sequence.cpu().numpy()
-            sequence = np.append(sequence, y_pred, axis=1) # append the prediction to the sequence
-            sequence = torch.tensor(sequence, dtype=torch.float32).to(device)
-    predictions = np.array(predictions).squeeze()
-    predictions = scaler.inverse_transform(predictions)
-    print(predictions)
-    last_date = data.index[-1]
-    date_range = pd.date_range(start=last_date, periods=seq_length+1, freq='15min')[1:]
-    prediction_df = pd.DataFrame(predictions, columns=data.columns, index=date_range)
-
-    plt.figure(figsize=(16, 8))
-    for column in prediction_df.columns:
-        plt.plot(prediction_df.index, prediction_df[column], label=column)
-    plt.xlabel('Time')
-    plt.ylabel('Value')
-    plt.title('Predicted Energy and Gas Usage for the Next Day')
-    plt.legend()
-    plt.show()
-
-def main():
-    df = pd.read_csv('data/energy_gas_usage.csv', parse_dates=['time'])
-    df.set_index('time', inplace=True) # replace the index column with the time column
+            y_test = y_test.cpu().numpy()
+            predictions.append(y_pred)
+            real_values.append(y_test)
+            
+    predictions = np.concatenate(predictions, axis=0)
+    real_values = np.concatenate(real_values, axis=0)
     
+    predictions = predictions.reshape(-1, predictions.shape[-1])
+    real_values = real_values.reshape(-1, real_values.shape[-1])
+    predictions = scaler.inverse_transform(predictions)
+    real_values = scaler.inverse_transform(real_values)
+    return predictions, real_values
+    
+def main():
+    seed = 42
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--predict', action='store_true')
+    args = parser.parse_args()
+
+    data = pd.read_csv('data/total_energy_usage.csv', parse_dates=['time'])
+    data = data.resample('h', on='time').sum().reset_index() # resample the data to hourly
+    data.set_index('time', inplace=True) # replace the index column with the time column
+
+    data['hour'] = data.index.hour
+    data['day_of_week'] = data.index.dayofweek
+    data['month'] = data.index.month
+
+    hour_encoding = pd.get_dummies(data['hour'], prefix='hour', drop_first=True)
+    day_of_week_encoding = pd.get_dummies(data['day_of_week'], prefix='day_of_week', drop_first=True)
+    month_encoding = pd.get_dummies(data['month'], prefix='month', drop_first=True)
+    
+    features = pd.concat([
+        data['energy_usage'],
+        hour_encoding,
+        day_of_week_encoding,
+        month_encoding
+    ], axis=1)
     scaler = MinMaxScaler()
-    data = scaler.fit_transform(df)
-    scaled_df = pd.DataFrame(data, columns=df.columns, index=df.index)
+    scaled_data = scaler.fit_transform(features.values)
+    seq_length = 24 * 7 # 7 days of data
+    prediction_length = 24 # 1 day of data
 
-    seq_length = 96 # full day
-    data = scaled_df.values
-    sequences, targets = create_sequences(data, seq_length)
+    dates = data.index
 
-    X_train, X_test, y_train, y_test = split_data(sequences, targets)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    X, y, sequence_dates = create_sequences(scaled_data, dates, seq_length, prediction_length)
+
+    X_train, y_train, X_test, y_test, train_dates, test_dates  = split_data(X, y, sequence_dates)
     X_train = torch.tensor(X_train, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.float32)
     X_test = torch.tensor(X_test, dtype=torch.float32)
@@ -121,22 +134,34 @@ def main():
     train_data = TensorDataset(X_train, y_train)
     test_data = TensorDataset(X_test, y_test)
 
-    train_loader, test_loader = init_dataloaders(train_data, test_data)
+    batch_size = 32
+    num_workers = 4
+    train_loader = DataLoader(train_data, batch_size=batch_size, num_workers=num_workers, shuffle=False)
+    test_loader = DataLoader(test_data, batch_size=batch_size, num_workers=num_workers, shuffle=False)
 
     input_size = X_train.shape[2]
-    hidden_size = 64
-    num_layers = 1
-    num_classes = y_train.shape[1]
-    learning_rate = 0.001
-    num_epochs = 2
+    hidden_size = 128
+    num_layers = 4
+    output_size = y_train.shape[2]
+    dropout = 0.2
 
-    model = LSTM(input_size, hidden_size, num_layers, num_classes)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = LSTM(input_size, hidden_size, num_layers, output_size, prediction_length, dropout)
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    train(model, optimizer, num_epochs, train_loader, device)
-    test(model, test_loader, device)
-
-    predict_next_day(model, scaler, scaled_df, seq_length, device)
+    
+    learning_rate = 0.001
+    num_epochs = 200
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    scheduler = StepLR(optimizer, step_size=15, gamma=0.90)
+    criterion = lambda y_pred, y_true: torch.sqrt(nn.MSELoss()(y_pred, y_true))
+    if args.test:
+        model.load_state_dict(torch.load('checkpoints/lstm_165.pth', weights_only=True)['model_state_dict']) 
+        test(model, criterion, test_loader, device)
+    elif args.predict:
+        model.load_state_dict(torch.load('checkpoints/lstm_15.pth', weights_only=True)['model_state_dict'])
+        predictions, real_values = predict(model, test_loader, scaler, device)
+    else:
+        train(model, optimizer, criterion, scheduler, num_epochs, train_loader, device)
 
 if __name__ == '__main__':
     main()
