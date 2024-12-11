@@ -222,7 +222,7 @@ def main():
         model.load_state_dict(torch.load('checkpoints/lstm_165.pth', weights_only=True)['model_state_dict']) 
         test(model, criterion, test_loader, device)
     elif args.predict:
-        model.load_state_dict(torch.load('test_checkpoints/lstm_60.pth', weights_only=True)['model_state_dict'])
+        model.load_state_dict(torch.load('test_checkpoints/lstm_65.pth', weights_only=True)['model_state_dict'])
         predictions, real_values = predict(model, test_loader, output_scaler, device)
         plot_predictions(predictions, real_values)
     else:
