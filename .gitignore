@@ -9,6 +9,10 @@ __pycache__/
 # Venv
 HEGP
 
+# Checkpoints
+checkpoints
+test_checkpoints
+
 # Distribution / packaging
 .Python
 build/
