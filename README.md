@@ -1,6 +1,6 @@
 # Home Energy Prediction
 
-This is a project I worked on to learn about predicting home energy consumption using time-series models such as GRU. The goal was to build a predictive model from scratch, focusing on understanding how to preprocess data, create a custom AI model, and train it effectively. I did not use pre-trained models, which did affect my accuracy, but the goal of this project was to design the architecture myself to gain deeper insights into how these systems work.
+This is a project I worked on to learn about predicting home energy consumption using time-series models such as LSTMs. The goal was to build a predictive model from scratch, focusing on understanding how to preprocess data, create a custom AI model, and train it effectively. I did not use pre-trained models, which did affect my accuracy, but the goal of this project was to design the architecture myself to gain deeper insights into how these systems work.
 
 The data for this project was collected directly from my own house over the span of one year. Due to the limited amount of data, the model's accuracy is not perfect and it struggles to capture long-term trends. However, the process provided valuable experience in building and training machine learning models on unstructured data.
 
