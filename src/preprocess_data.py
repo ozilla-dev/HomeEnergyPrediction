@@ -1,4 +1,3 @@
-import csv
 import pandas as pd
 
 def preprocess_data(energy_file, gas_file, output_file):
@@ -17,7 +16,4 @@ def preprocess_data(energy_file, gas_file, output_file):
     df['energy_usage'] = export_energy - import_energy
     df.to_csv(output_file, index=False)
 
-
-
 preprocess_data('data/energy_usage.csv', 'data/gas_usage.csv', 'data/energy_gas_usage.csv')
-

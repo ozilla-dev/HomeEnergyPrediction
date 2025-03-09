@@ -10,9 +10,9 @@ The purpose of this project was educational, so the accuracy is limited, but the
 
 
 ## How to Use
-   ```bash
-   git clone https://github.com/DeadEvilV/HomeEnergyPrediction.git
-   cd HomeEnergyPrediction
+   ```
    pip install -r requirements.txt
    python src/main.py --predict
    ```
+
+This is to do model inference to predict a defined time span.

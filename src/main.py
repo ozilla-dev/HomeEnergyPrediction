@@ -99,7 +99,7 @@ def predict(model, test_loader, scaler, device, sample_size=68):
     predictions = predictions.reshape(-1, predictions.shape[-1])
     real_values = real_values.reshape(-1, real_values.shape[-1])
     
-    # Inverse transform for energy_usage (first column)
+    # inverse transform for energy_usage (first column)
     predictions = scaler.inverse_transform(predictions)
     real_values = scaler.inverse_transform(real_values)
     
@@ -128,6 +128,13 @@ def plot_predictions(predictions, real_values):
     
     plt.show()
 
+def add_fourier_terms(df, period=56, order=3):
+    t = np.arange(len(df))
+    for i in range(1, order + 1):
+        df[f'sin_{period}_{i}'] = np.sin(2 * np.pi * i * t / period)
+        df[f'cos_{period}_{i}'] = np.cos(2 * np.pi * i * t / period)
+    return df
+
 def main():
     seed = 42
     np.random.seed(seed)
@@ -141,35 +148,46 @@ def main():
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--predict', action='store_true')
     args = parser.parse_args()
-    
+
     data = pd.read_csv('data/total_energy_usage.csv', parse_dates=['time'])
     data = data.resample('3h', on='time').sum().reset_index()
     data.set_index('time', inplace=True)
-    
-    # Compute rolling statistics over a 24-hour window (8 intervals of 3h)
+
     data['rolling_mean_24h'] = data['energy_usage'].rolling(window=8, min_periods=1).mean()
     data['rolling_std_24h'] = data['energy_usage'].rolling(window=8, min_periods=1).std().fillna(0)
-    
-    # Create time-based features
+
+    data['rolling_min_24h'] = data['energy_usage'].rolling(window=8, min_periods=1).min()
+    data['rolling_max_24h'] = data['energy_usage'].rolling(window=8, min_periods=1).max()
+    data['rolling_sum_24h'] = data['energy_usage'].rolling(window=8, min_periods=1).sum()
+
+    # calculate the exponentially weighted mean to prioritize recent data
+    data['ewm_mean_24h'] = data['energy_usage'].ewm(span=8, adjust=False).mean()
+
+    # calculate fourier terms for seasonal data
+    data = add_fourier_terms(data, period=56, order=3)
+
     data['hour'] = data.index.hour
     data['day_of_week'] = data.index.dayofweek
     data['month'] = data.index.month
-    
-    # One-hot encode time-based features
+
     hour_enc = pd.get_dummies(data['hour'], prefix='hour', drop_first=True)
     dow_enc = pd.get_dummies(data['day_of_week'], prefix='day_of_week', drop_first=True)
     month_enc = pd.get_dummies(data['month'], prefix='month', drop_first=True)
-    
+
     features = pd.concat([
         data['energy_usage'],
         hour_enc,
         dow_enc,
         month_enc,
         data['rolling_mean_24h'],
-        data['rolling_std_24h']
+        data['rolling_std_24h'],
+        data['rolling_min_24h'],
+        data['rolling_max_24h'],
+        data['rolling_sum_24h'],
+        data['ewm_mean_24h'],
+        data[[col for col in data.columns if col.startswith('sin_') or col.startswith('cos_')]]
     ], axis=1)
-    
-    # Apply z-score normalization
+
     scaler = StandardScaler()
     scaled_data = scaler.fit_transform(features.values)
 
@@ -177,7 +195,7 @@ def main():
     output_scaler.fit(features[['energy_usage']])
 
     seq_length = 8 * 120  # 120 days of data (8 intervals per day)
-    prediction_length = 8  # Predict 1 day ahead
+    prediction_length = 8  # predict 1 day ahead
     dates = data.index
     X, y, sequence_dates = create_sequences(scaled_data, dates, seq_length, prediction_length)
     y = y.reshape(-1, prediction_length, 1)
@@ -217,11 +235,11 @@ def main():
     criterion = nn.HuberLoss(delta=0.1)
     
     if args.test:
-        checkpoint = torch.load('checkpoints/lstm_10.pth', weights_only=True)
+        checkpoint = torch.load('lstm_200.pth', weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         test(model, criterion, test_loader, device)
     elif args.predict:
-        checkpoint = torch.load('checkpoints/lstm_200.pth', weights_only=True)
+        checkpoint = torch.load('lstm_200.pth', weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         predictions, real_values = predict(model, test_loader, output_scaler, device)
         plot_predictions(predictions, real_values)
