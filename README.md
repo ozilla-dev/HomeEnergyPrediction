@@ -6,7 +6,8 @@ The data for this project was collected directly from my own house over the span
 
 The purpose of this project was educational, so the accuracy is limited, but the experience gained was valuable.
 
-![energy_usage](https://github.com/user-attachments/assets/cd8238f7-68ac-4a61-b1c8-ed117ab32496)
+![energy_usage](https://github.com/user-attachments/assets/2df5dafc-ee31-4114-9f63-e8e113300eb5)
+
 
 ## How to Use
    ```bash
